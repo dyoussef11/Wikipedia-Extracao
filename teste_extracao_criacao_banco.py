@@ -6,9 +6,10 @@ import pymysql
 url = 'https://en.wikipedia.org/wiki/List_of_World_Heritage_Sites_by_country'
 tables = pd.read_html(url)
 unesco_df = tables[0]
-
-# 2. Limpeza dos dados
+print(f'[Antes da Limpeza]: \n\n',unesco_df)
+# # 2. Limpeza dos dados
 unesco_df.columns = ['Country', 'Cultural', 'Natural', 'Mixed', 'Total', 'Shared', 'Region']
+print(f'[Depois da Renomear]: \n\n',unesco_df)
 unesco_df = unesco_df[unesco_df['Country'] != 'Total']  # Remove totalizador
 
 def clean_number(val):
@@ -17,9 +18,10 @@ def clean_number(val):
     except:
         return 0
 
-for col in ['Cultural', 'Natural', 'Mixed', 'Total', 'Shared']:
+for col in ['Cultural', 'Natural', 'Mixed']:
     unesco_df.loc[:, col] = unesco_df[col].map(clean_number)
 
+print(f'[Depois da Limpeza]: \n\n',unesco_df)
 
 # 3. Conexão com MySQL
 engine = create_engine('mysql+pymysql://usuario:1234@localhost:3306/unesco_db')
@@ -106,10 +108,21 @@ with engine.begin() as conn:
             ))
             print(f"   > Contagem inserida: país_id={country_id}, tipo='{stype}', contagem={row[stype]}")
 
-        conn.execute(shared_sites.insert().values(
-            country_id=country_id,
-            shared_sites_count=row['Shared']
-        ))
-        print(f"   > Shared sites inseridos para país_id={country_id}, contagem={row['Shared']}")
+        # CORREÇÃO: Verificar explicitamente o valor de Shared antes de inserir
+        shared_count = row['Shared']
+        print(f"DEBUG - País: {row['Country']}, Shared: {shared_count} (tipo: {type(shared_count)})")  # Linha de debug
+        
+        if pd.notna(shared_count) and shared_count > 0:
+            conn.execute(shared_sites.insert().values(
+                country_id=country_id,
+                shared_sites_count=int(shared_count)  # Garantindo que é inteiro
+            ))
+            print(f"   > Shared sites inseridos para país_id={country_id}, contagem={shared_count}")
+        else:
+            conn.execute(shared_sites.insert().values(
+                country_id=country_id,
+                shared_sites_count=0
+            ))
+            print(f"   > Shared sites definidos como 0 para país_id={country_id}")
         
 print("✅ Dados inseridos com sucesso no MySQL!")
