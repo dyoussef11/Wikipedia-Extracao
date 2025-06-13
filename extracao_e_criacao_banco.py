@@ -1,34 +1,66 @@
 import pandas as pd
-from sqlalchemy import create_engine, Table, Column, Integer, String, MetaData, ForeignKey, select
+from sqlalchemy import create_engine, Table, Column, Integer, String, MetaData, ForeignKey, select, Text
 import pymysql
+import re
+import requests
+from bs4 import BeautifulSoup
+from tratamento_dicionario import receber_url
 
-# 1. Leitura da tabela UNESCO
+
+# 1. Função para extrair nome limpo da região e notas (sem notas numéricas)
+def split_region_and_notes(text):
+    if pd.isna(text):
+        return '', []
+    notes = re.findall(r'\[.*?\]', text)
+    clean_notes = []
+    for note in notes:
+        tag = note.strip('[]').strip()
+        if not tag.isdigit():  # filtra referências numéricas
+            clean_notes.append(tag)
+    name = re.split(r'\[', text)[0].strip()
+    return name, clean_notes
+
+# 2. Função para extrair número e notas não numéricas nas colunas numéricas
+def clean_number_and_notes(val):
+    if pd.isna(val):
+        return 0, []
+    notes = re.findall(r'\[.*?\]', str(val))
+    clean_notes = []
+    for note in notes:
+        tag = note.strip('[]').strip()
+        if not tag.isdigit():
+            clean_notes.append(tag)
+    try:
+        number = int(str(val).split('[')[0])
+    except:
+        number = 0
+    return number, clean_notes
+
+
+# 3. Leitura da tabela UNESCO da Wikipedia
 url = 'https://en.wikipedia.org/wiki/List_of_World_Heritage_Sites_by_country'
 tables = pd.read_html(url)
 unesco_df = tables[0]
 
-print(f'[Antes da Limpeza]: \n\n',unesco_df)
-# # 2. Limpeza dos dados
+note_descriptions: dict = receber_url(url)
+
+
+# 5. Renomear colunas e remover linha Total
 unesco_df.columns = ['Country', 'Cultural', 'Natural', 'Mixed', 'Total', 'Shared', 'Region']
-print(f'[Depois da Renomear]: \n\n',unesco_df)
-unesco_df = unesco_df[unesco_df['Country'] != 'Total']  # Remove totalizador
+unesco_df = unesco_df[unesco_df['Country'] != 'Total'].copy()
 
-def clean_number(val):
-    try:
-        return int(str(val).split('[')[0])
-    except:
-        return 0
-
+# 6. Extrai dados e notas das colunas numéricas
 for col in ['Cultural', 'Natural', 'Mixed']:
-    unesco_df.loc[:, col] = unesco_df[col].map(clean_number)
+    unesco_df[[f'{col}_count', f'{col}_notes']] = unesco_df[col].apply(lambda x: pd.Series(clean_number_and_notes(x)))
 
-print(f'[Depois da Limpeza]: \n\n',unesco_df)
+# 7. Extrai região limpa e notas (sem referências numéricas)
+unesco_df[['Region_clean', 'Region_notes']] = unesco_df['Region'].apply(lambda x: pd.Series(split_region_and_notes(x)))
 
-# 3. Conexão com MySQL
+# 8. Conexão e metadados do MySQL
 engine = create_engine('mysql+pymysql://usuario:1234@localhost:3306/unesco_db')
 metadata = MetaData()
 
-# 4. Definição das tabelas
+# 9. Definição das tabelas
 regions = Table('regions', metadata,
                 Column('id_regions', Integer, primary_key=True, autoincrement=True),
                 Column('name', String(100), unique=True, nullable=False))
@@ -48,62 +80,160 @@ heritage_sites_counts = Table('heritage_sites_counts', metadata,
                               Column('site_type_id', Integer, ForeignKey('site_types.id_site_types')),
                               Column('site_count', Integer, default=0))
 
+notes = Table('notes', metadata,
+              Column('id_note', Integer, primary_key=True, autoincrement=True),
+              Column('tag', String(50), unique=True, nullable=False),
+              Column('description', Text))
 
-# 5. Criar tabelas no banco
+region_notes = Table('region_notes', metadata,
+                     Column('id_region_note', Integer, primary_key=True, autoincrement=True),
+                     Column('region_id', Integer, ForeignKey('regions.id_regions')),
+                     Column('note_id', Integer, ForeignKey('notes.id_note')))
+
+country_notes = Table('country_notes', metadata,
+                      Column('id_country_note', Integer, primary_key=True, autoincrement=True),
+                      Column('country_id', Integer, ForeignKey('countries.id_countries')),
+                      Column('note_id', Integer, ForeignKey('notes.id_note')),
+                      Column('site_type_id', Integer, ForeignKey('site_types.id_site_types')))
+
+meaningful_notes = {}
+numeric_references = {}
+
+for tag, content in note_descriptions.items():
+    if tag.isdigit():  # These are just numeric citation markers
+        numeric_references[tag] = content
+    else:
+        meaningful_notes[tag] = content
+
+print(f"Found {len(meaningful_notes)} meaningful notes")
+print(f"Found {len(numeric_references)} numeric references (can be ignored)")
+
+
+#10. Criar tabelas no banco
 metadata.create_all(engine)
 
-# 6. Inserção de dados
+# 11. Inserção de dados
 with engine.begin() as conn:
-    print("🔄 Inserindo tipos de site (site_types)...")
+    
+    # Insert all meaningful notes
+    for tag, description in meaningful_notes.items():
+        # Check if note already exists
+        exists = conn.execute(
+            select(notes.c.id_note).where(notes.c.tag == tag)
+        ).fetchone()
+        
+        if not exists:
+            # Insert new note
+            conn.execute(
+                notes.insert().values(
+                    tag=tag,
+                    description=description
+                )
+            )
+            print(f"Inserted note {tag}")
+        else:
+            print(f"Note {tag} already exists, skipping")
+
+    # Verify counts
+
+    # Print first 5 notes as sample
+    sample_notes = conn.execute(
+        select(notes).limit(5)
+    ).fetchall()
+    
+    # Inserir tipos de sítio
     site_types_data = ['Cultural', 'Natural', 'Mixed']
     site_type_map = {}
     for stype in site_types_data:
-        sel = select(site_types.c.id_site_types).where(site_types.c.type_name == stype)
-        result = conn.execute(sel).fetchone()
+        result = conn.execute(select(site_types.c.id_site_types).where(site_types.c.type_name == stype)).fetchone()
         if result:
             site_type_id = result[0]
-            print(f" - Tipo '{stype}' já existe com id {site_type_id}")
         else:
             conn.execute(site_types.insert().values(type_name=stype))
             site_type_id = conn.execute(select(site_types.c.id_site_types).where(site_types.c.type_name == stype)).fetchone()[0]
-            print(f" - Tipo '{stype}' inserido com id {site_type_id}")
         site_type_map[stype] = site_type_id
 
-    print("\n🔄 Inserindo regiões (regions)...")
+    # Inserir regiões
     region_map = {}
-    for reg in unesco_df['Region'].unique():
-        sel = select(regions.c.id_regions).where(regions.c.name == reg)
-        result = conn.execute(sel).fetchone()
+    for reg in unesco_df['Region_clean'].unique():
+        result = conn.execute(select(regions.c.id_regions).where(regions.c.name == reg)).fetchone()
         if result:
             region_id = result[0]
-            print(f" - Região '{reg}' já existe com id {region_id}")
         else:
             conn.execute(regions.insert().values(name=reg))
             region_id = conn.execute(select(regions.c.id_regions).where(regions.c.name == reg)).fetchone()[0]
-            print(f" - Região '{reg}' inserida com id {region_id}")
         region_map[reg] = region_id
 
-    print("\n🔄 Inserindo países e contagens...")
-    for _, row in unesco_df.iterrows():
-        region_id = region_map[row['Region']]
+    # Inserir notas globais e criar mapa (com descrição da extração)
+    note_map = {}
+    # Notas da região
+    for note_list in unesco_df['Region_notes']:
+        for note in note_list:
+            if note not in note_map:
+                result = conn.execute(select(notes.c.id_note).where(notes.c.tag == note)).fetchone()
+                if result:
+                    note_id = result[0]
+                else:
+                    description = note_descriptions.get(note, None)
+                    conn.execute(notes.insert().values(tag=note, description=description))
+                    note_id = conn.execute(select(notes.c.id_note).where(notes.c.tag == note)).fetchone()[0]
+                note_map[note] = note_id
 
-        sel = select(countries.c.id_countries).where(countries.c.name == row['Country'])
-        result = conn.execute(sel).fetchone()
-        if result:
-            country_id = result[0]
-            print(f" - País '{row['Country']}' já existe com id {country_id}")
+    # Notas das colunas numéricas
+    for col in ['Cultural_notes', 'Natural_notes', 'Mixed_notes']:
+        for note_list in unesco_df[col]:
+            for note in note_list:
+                if note not in note_map:
+                    result = conn.execute(select(notes.c.id_note).where(notes.c.tag == note)).fetchone()
+                    if result:
+                        note_id = result[0]
+                    else:
+                        description = note_descriptions.get(note, None)
+                        conn.execute(notes.insert().values(tag=note, description=description))
+                        note_id = conn.execute(select(notes.c.id_note).where(notes.c.tag == note)).fetchone()[0]
+                    note_map[note] = note_id
+
+    # Inserir países, contagens, notas regionais e notas específicas país+tipo
+    for _, row in unesco_df.iterrows():
+        region_id = region_map[row['Region_clean']]
+        country_result = conn.execute(select(countries.c.id_countries).where(countries.c.name == row['Country'])).fetchone()
+        if country_result:
+            country_id = country_result[0]
         else:
             conn.execute(countries.insert().values(name=row['Country'], region_id=region_id))
             country_id = conn.execute(select(countries.c.id_countries).where(countries.c.name == row['Country'])).fetchone()[0]
-            print(f" - País '{row['Country']}' inserido com id {country_id}")
 
+        # Inserir contagens e notas por tipo
         for stype in site_types_data:
+            count = row[f'{stype}_count']
             conn.execute(heritage_sites_counts.insert().values(
                 country_id=country_id,
                 site_type_id=site_type_map[stype],
-                site_count=row[stype]
+                site_count=count
             ))
-            print(f"   > Contagem inserida: país_id={country_id}, tipo='{stype}', contagem={row[stype]}")
 
-        
-print("✅ Dados inseridos com sucesso no MySQL!")
+            note_list = row[f'{stype}_notes']
+            for note in note_list:
+                note_id = note_map.get(note)
+                if note_id:
+                    # Evitar duplicidade opcional
+                    exists = conn.execute(select(country_notes).where(
+                        (country_notes.c.country_id == country_id) &
+                        (country_notes.c.note_id == note_id) &
+                        (country_notes.c.site_type_id == site_type_map[stype])
+                    )).fetchone()
+                    if not exists:
+                        conn.execute(country_notes.insert().values(
+                            country_id=country_id,
+                            note_id=note_id,
+                            site_type_id=site_type_map[stype]
+                        ))
+
+        # Inserir notas da região (se quiser manter)
+        for note in row['Region_notes']:
+            conn.execute(region_notes.insert().values(
+                region_id=region_id,
+                note_id=note_map[note]
+            ))
+
+print("✅ Inserção completa com notas e descrições filtradas (sem referências numéricas)!")
