@@ -56,6 +56,19 @@ for col in ['Cultural', 'Natural', 'Mixed']:
 # 7. Extrai região limpa e notas (sem referências numéricas)
 unesco_df[['Region_clean', 'Region_notes']] = unesco_df['Region'].apply(lambda x: pd.Series(split_region_and_notes(x)))
 
+meaningful_notes = {}
+numeric_references = {}
+
+for tag, content in note_descriptions.items():
+    if tag.isdigit():  # These are just numeric citation markers
+        numeric_references[tag] = content
+    else:
+        meaningful_notes[tag] = content
+
+print(f"Found {len(meaningful_notes)} meaningful notes")
+print(f"Found {len(numeric_references)} numeric references (can be ignored)")
+
+
 # 8. Conexão e metadados do MySQL
 engine = create_engine('mysql+pymysql://usuario:1234@localhost:3306/unesco_db')
 metadata = MetaData()
@@ -96,17 +109,7 @@ country_notes = Table('country_notes', metadata,
                       Column('note_id', Integer, ForeignKey('notes.id_note')),
                       Column('site_type_id', Integer, ForeignKey('site_types.id_site_types')))
 
-meaningful_notes = {}
-numeric_references = {}
 
-for tag, content in note_descriptions.items():
-    if tag.isdigit():  # These are just numeric citation markers
-        numeric_references[tag] = content
-    else:
-        meaningful_notes[tag] = content
-
-print(f"Found {len(meaningful_notes)} meaningful notes")
-print(f"Found {len(numeric_references)} numeric references (can be ignored)")
 
 
 #10. Criar tabelas no banco
@@ -115,15 +118,15 @@ metadata.create_all(engine)
 # 11. Inserção de dados
 with engine.begin() as conn:
     
-    # Insert all meaningful notes
+    # Inserido todas notações necessárias
     for tag, description in meaningful_notes.items():
-        # Check if note already exists
+        # Verifica caso já exista notas no banco
         exists = conn.execute(
             select(notes.c.id_note).where(notes.c.tag == tag)
         ).fetchone()
         
         if not exists:
-            # Insert new note
+            # Inserção de notas
             conn.execute(
                 notes.insert().values(
                     tag=tag,
@@ -134,9 +137,6 @@ with engine.begin() as conn:
         else:
             print(f"Note {tag} already exists, skipping")
 
-    # Verify counts
-
-    # Print first 5 notes as sample
     sample_notes = conn.execute(
         select(notes).limit(5)
     ).fetchall()
