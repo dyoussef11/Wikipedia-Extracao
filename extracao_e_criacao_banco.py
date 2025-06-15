@@ -1,10 +1,11 @@
 import pandas as pd
-from sqlalchemy import create_engine, Table, Column, Integer, String, MetaData, ForeignKey, select, Text
+from sqlalchemy import create_engine, Table, Column, Integer, String, MetaData, ForeignKey, select, Text,text
 import pymysql
 import re
 import requests
 from bs4 import BeautifulSoup
 from tratamento_dicionario import receber_url
+from getpass import getpass
 
 
 # 1. Função para extrair nome limpo da região e notas (sem notas numéricas)
@@ -65,12 +66,32 @@ for tag, content in note_descriptions.items():
     else:
         meaningful_notes[tag] = content
 
-print(f"Found {len(meaningful_notes)} meaningful notes")
-print(f"Found {len(numeric_references)} numeric references (can be ignored)")
+# print(f"Found {len(meaningful_notes)} meaningful notes")
+# print(f"Found {len(numeric_references)} numeric references (can be ignored)")
 
+# Solicita credenciais ao usuário
+print('\n[Geração do Banco de dados ] \n')
+usuario = input("Informe o nome de usuário do MySQL: ")
+senha = getpass("Informe a senha: ")
+host = input("Informe o host (padrão: localhost): ") or "localhost"
+porta = input("Informe a porta (padrão: 3306): ") or "3306"
+nome_banco = input("Informe o nome do banco de dados: ")
 
-# 8. Conexão e metadados do MySQL
-engine = create_engine('mysql+pymysql://usuario:1234@localhost:3306/unesco_db')
+# Cria a engine para conexão com o banco especificado
+url_conexao = f"mysql+pymysql://{usuario}:{senha}@{host}:{porta}/{nome_banco}"
+
+# Conecta ao MySQL sem especificar o banco de dados
+url_inicial = f"mysql+pymysql://{usuario}:{senha}@{host}:{porta}/"
+
+engine_inicial= create_engine(url_inicial)
+
+# Cria o banco se não existir
+with engine_inicial.connect() as conn:
+    conn.execute(text(f"CREATE DATABASE IF NOT EXISTS {nome_banco}"))
+    print(f"Banco '{nome_banco}' verificado ou criado com sucesso!")
+
+engine = create_engine(f"mysql+pymysql://{usuario}:{senha}@{host}:{porta}/{nome_banco}")
+
 metadata = MetaData()
 
 # 9. Definição das tabelas

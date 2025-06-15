@@ -3,19 +3,29 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sqlalchemy import create_engine
 import os
+from getpass import getpass
+
+# Solicita credenciais ao usuário
+print('\n[Geração de Gráficos - Scripts SQL predefinidos] \n')
+db_user = input("Informe o nome de usuário do MySQL: ")
+db_pass = getpass("Informe a senha: ")
+db_host = input("Informe o host (padrão: localhost): ") or "localhost"
+db_port = input("Informe a porta (padrão: 3306): ") or "3306"
+db_name = input("Informe o nome do banco de dados: ")
+
 
 # Conectar ao banco de dados MySQL
-db_user = os.getenv('DB_USER', 'user')
-db_pass = os.getenv('DB_PASS', 'pass')
-db_host = os.getenv('DB_HOST', 'localhost')
-db_port = os.getenv('DB_PORT', '3305')
-db_name = os.getenv('DB_NAME', 'mydb')
+# db_user = os.getenv('DB_USER', 'user')
+# db_pass = os.getenv('DB_PASS', 'pass')
+# db_host = os.getenv('DB_HOST', 'localhost')
+# db_port = os.getenv('DB_PORT', '3305')
+# db_name = os.getenv('DB_NAME', 'mydb')
 
 connection_string = f'mysql+pymysql://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}'
 engine = create_engine(connection_string)
 
 # Create output directory for saved images if it doesn't exist
-output_dir = 'plots'
+output_dir = 'graficos'
 os.makedirs(output_dir, exist_ok=True)
 
 # Consultas SQL

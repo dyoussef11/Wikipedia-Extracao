@@ -83,7 +83,7 @@ def receber_url(url):
             content = clean_tags(content)
             new_tag = tag_mapping.get(tag, tag)
             note_descriptions[new_tag] = content
-    print(f"{note_descriptions}")
-    print(f"Total descrições de notas extraídas: {len(note_descriptions)}")
+    # print(f"{note_descriptions}")
+    # print(f"Total descrições de notas extraídas: {len(note_descriptions)}")
     
     return note_descriptions
